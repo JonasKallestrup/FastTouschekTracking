@@ -38,7 +38,6 @@ theta = linspace(0,2*pi,nlines);
 theta0 = theta;
 r00 = repmat(orbit,1,nlines)+[1e-9;0;1e-9;0;0;0];
 
-
 % convert xmax and x-resolution into an maximum ampltidue and resolution
 if isfield(Settings,'G')
     G = Settings.G;
@@ -71,7 +70,7 @@ while ~isempty(theta)
     for a = 1:numel(lost)
         if ~lost(a) % particle survived
             if n == 1
-                dA = 0;
+                dA(a) = 0;
             else
                 dA(a) = (A_lim_lost(a) - A_check(a))/2;% change in amplitude for next run
                 A_lim_surv(a) = A_check(a);
@@ -90,6 +89,7 @@ while ~isempty(theta)
         else
             A_check(a) = A_check(a) + dA(a);
         end
+
     end
 
     % remove lines where boundary has already been discovered

@@ -81,7 +81,7 @@ while ~boundaryFound
             xp_da = NaN;
         else
             % maximum amplitude found. Now find equivalent positions for constant dp
-            [Rout_da,~] = ringpass(atradoff(ring),Rin_surv,Settings.nTurns);
+            [Rout_da,~] = ringpass(ring,Rin_surv,nTurns);
             xout_surv = Rout_da(1,:);
             xpout_surv = Rout_da(2,:);
             [x_da,xp_da] = getBoundary(xout_surv(~isnan(xout_surv)),xpout_surv(~isnan(xout_surv)));
