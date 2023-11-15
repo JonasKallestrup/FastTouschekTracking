@@ -1,4 +1,4 @@
-function [x_da,xp_da] = DAmethod_grid(dpoffset,Settings)
+function [x_da,xp_da,x_stable,xp_stable,x_unstable,xp_unstable] = DAmethod_grid(dpoffset,Settings)
 %{
 Method to compute dynamic aperture using a grid search. 
 
@@ -12,6 +12,8 @@ Settings.resolution_xp - resolution of x' of grid
 
 OPTIONAL fields of "Settings" struct: 
 Settings.orbit - orbit to do grid search around
+
+The output of x_stable, xp_stable, x_unstable and xp_unstable is optional
 
 %}
 
@@ -45,9 +47,14 @@ Rin(2,:) = Rin(2,:) + XP;
 Rin(5,:) = Rin(5,:)+dpoffset;
 Rin = Rin + [1e-9;0;1e-9;0;0;0];
 
-[~,lost] = ringpass(ring,Rin,nTurns);
-Xgood = X(~lost);
-XPgood = XP(~lost);
-bndry = boundary(Xgood',XPgood');
-x_da = Xgood(bndry);
-xp_da = XPgood(bndry);
+% [~,lost] = ringpass(ring,Rin,nTurns);
+[~,lost] = ringpass_parallel(ring,Rin,nTurns);
+lost = logical(lost);
+x_stable = X(~lost);
+xp_stable = XP(~lost);
+x_unstable = X(lost);
+xp_unstable = XP(lost);
+
+bndry = boundary(x_stable',xp_stable');
+x_da = x_stable(bndry);
+xp_da = xp_stable(bndry);

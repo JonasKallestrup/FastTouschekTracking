@@ -1,10 +1,28 @@
 function [u_da,up_da,x_da,xp_da,Settings] = computeDA(Settings)
-% Select Dynamic Aperture method
+%{
+Function used to compute the dynamic apertures for various values of dp/p. 
+A binary search finds the values of dp/p that gives the boundary for the
+largest and smallest value of dp/p that still gives a non-zero dynamic
+aperture. 
+In between the two dp/p boundaries, a fixed dp/p resolution is used to
+sample the x,x',dp/p 3d-volume.
+
+REQUIRED fields of "Settings" struct: 
+Settings.ring           - lattice
+Settings.dpResolution   - boundary resolution of x,x',dp/p
+Settings.dpmax          - maximum dp/p used for dynamic aperture search
+Settings.dpSliceStep    - dp/p separation of two adjecent x,x' DA slices
+Settings.G              - matrix to normalize x,x' phase space 
+                            (inherited automatically from FastTouschekTracking)
+
+
+%}
+
 
 if strcmp(Settings.DAmethod,'grid')
-    DAmethod = @(dpoffset,Settings) DAmethod_grid(dpoffset,Settings)
+    DAmethod = @(dpoffset,Settings) DAmethod_grid(dpoffset,Settings);
 elseif strcmp(Settings.DAmethod,'polargrid')
-    DAmethod = @(dpoffset,Settings) DAmethod_polargrid(dpoffset,Settings)
+    DAmethod = @(dpoffset,Settings) DAmethod_polargrid(dpoffset,Settings);
 elseif strcmp(Settings.DAmethod,'sieve')
     DAmethod = @(dpoffset,Settings) DAmethod_sieve(dpoffset,Settings);
 elseif strcmp(Settings.DAmethod,'binary')
@@ -20,11 +38,7 @@ else
 end
 
 
-%{
-A Binary Search is used to find the maximum and minimum value of dp that
-still has non-zero dynamic aperture. 
-%}
-
+fprintf('      Computing DA for dp = 0\n')
 
 k=1;
 [x_tmp,xp_tmp] = DAmethod(0,Settings);% Compute DA for dp=0
@@ -37,13 +51,14 @@ xp_da{k} = xp_tmp;
 k=k+1;
 
 dpStep_lost = [];
-dpStep_cur = max(Settings.dpSteps_DA);
+dpStep_cur = Settings.dpmax;
 
 % First compute the positive boundary
 boundaryFound= 0;
 i = 0;
 while ~boundaryFound
     i = i+1;
+    fprintf(['      Computing DA for dp = ',num2str(dpStep_cur),'\n'])
     [x_tmp,xp_tmp] = DAmethod(dpStep_cur,Settings);
     if any(isnan(x_tmp)) || any(x_tmp==0)% step failed
         dpStep_lost = [dpStep_lost,dpStep_cur];
@@ -61,15 +76,16 @@ while ~boundaryFound
     end
     boundaryFound = min(abs(dpStep_lost-dpStep_cur))<Settings.dpResolution;
 end
-disp(['Positive DA-DP boundary found: ',num2str(max(dpSteps_good))])
+fprintf(['          Positive DA-DP boundary found: ',num2str(max(dpSteps_good)),'\n'])
 
 % Next, compute the negative boundary
 boundaryFound= 0;
 dpStep_lost = [];
 i = 0;
-dpStep_cur = min(Settings.dpSteps_DA); 
+dpStep_cur = -Settings.dpmax; 
 while ~boundaryFound
     i = i+1;
+    fprintf(['      Computing DA for dp = ',num2str(dpStep_cur),'\n'])
     [x_tmp,xp_tmp] = DAmethod(dpStep_cur,Settings);
     if any(isnan(x_tmp)) || any(x_tmp==0)% step failed
         dpStep_lost = [dpStep_lost,dpStep_cur];
@@ -82,13 +98,12 @@ while ~boundaryFound
         if i == 1
            break; % The minimum dp value was still OK.
         end
-        dpStep_cur = min(dpSteps_good)+ (min(dpStep_lost)-min(dpSteps_good))/2;
+        dpStep_cur = min(dpSteps_good)+ (max(dpStep_lost)-min(dpSteps_good))/2;
         
     end
     boundaryFound = min(abs(dpStep_lost-dpStep_cur))<Settings.dpResolution;
 end
-disp(['Negative DA-DP boundary found: ',num2str(min(dpSteps_good))])
-
+fprintf(['          Negative DA-DP boundary found: ',num2str(min(dpSteps_good)),'\n'])
 
 
 %{
@@ -97,10 +112,11 @@ DAs for discrete values of dp. The values of dp to compute is decided by
 the dpSteps_DA variable specified by the user. 
 %}
 
-dp_toCheck = Settings.dpSteps_DA(all([Settings.dpSteps_DA<max(dpSteps_good); Settings.dpSteps_DA>min(dpSteps_good)]));
+
+dp_toCheck = min(dpSteps_good):Settings.dpSliceStep:max(dpSteps_good);
 dp_toCheck = dp_toCheck(~ismember(dp_toCheck,dpSteps_good));
 for a = 1:numel(dp_toCheck)
-    disp(['Computing dpStep #',num2str(a),' out of ',num2str(numel(dp_toCheck)),'. dp = ',num2str(dp_toCheck(a))])
+    fprintf(['      Computing DA for intermediate step. dp = ',num2str(dp_toCheck(a)),'\n'])
     [x_da{k},xp_da{k}] = DAmethod(dp_toCheck(a),Settings);
     if all(x_da{k}==0)
         x_da{k} = NaN;

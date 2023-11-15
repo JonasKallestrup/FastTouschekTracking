@@ -1,7 +1,48 @@
 function TL = FastTouschekTracking(settingFilePath)
+%{
+Main execution of FastTouschekTracking method.
+First, the dynamic apertures for the specified range of dp-values
+is computed.
+Then, the momentum acceptance is found using the interface-method
+Lastly, the Touschek lifetime is computed using Piwinski's formula 
+
+A path to the file location of a .mat file containing the
+"Settings" struct can be given as input instead of the struct itself
+
+
+REQUIRED fields of "Settings" struct:
+Settings.ring           - lattice
+Settings.outputName     - location and filename of output of results
+Settings.dpmax          - maximum value of dp/p for momentum acceptance search
+                        - also maximum dp/p used for dynamic aperture search
+                        (see computeDA())
+Settings.dpResolution   - resolution of dp/p in momentum acceptance search
+                        - also boundary-resolution of x,x',dp/p 3d volume
+                        (see computeDA())
+Settings.dpSliceStep    - dp/p separation of two adjecent x,x' DA slices
+Settings.Ib             - single bunch current (Touschek Calc.)
+Settings.params         - beam parameters (computed using, e.g., atx())
+    Settings.params.modemittance(1:2)   - horiz. and vert. mode-emittance
+    Settings.params.espread             - bunch energy spread
+    Settings.params.blength             - bunch length
+    
+
+OPTIONAL field of "Settings" struct:
+Settings.G              - matrix to normalize x,x' phase space 
+
+
+NOTE: see also requirements for "Settings" in the chosen dynamic aperture
+computation method!
+
+%}
+
+
 addpath('/psi/home/kallestrup_j/at/atmat/')
 addpath('/psi/home/kallestrup_j/at_jk/');
 atpath;
+
+fprintf('\n\n ### BEGINNING FAST TOUSCHEK TRACKING ###\n\n')
+
 
 if isstring(settingFilePath) || ischar(settingFilePath)
     load(settingFilePath,'Settings')
@@ -11,12 +52,22 @@ end
 t1 = tic;% start time taking to compute total duration
 
 ring = Settings.ring;
-G = Settings.G;
+
+% convert xmax and x-resolution into an maximum ampltidue and resolution
+if isfield(Settings,'G')
+    G = Settings.G;
+else
+    [~,LinData] = atlinopt2(ring,1);
+    G = [1/sqrt(LinData.beta(1)),0;LinData.alpha(1)/sqrt(LinData.beta(1)),sqrt(LinData.beta(1))];
+    Settings.G = G;
+end
+
 
 %% Compute DAs for the various values of dp/p for the lattice
+fprintf(['   Launching DA computation. Method: ',Settings.DAmethod,'\n'])
 [u_da,up_da,x_da,xp_da,Settings] = computeDA(Settings);
 dpoffsets_DA = Settings.dpoffsets_DA;
-
+fprintf('   DA computation finished\n')
 %% perform interface method
 % localize indices in lattice with non-zero length
 index = 1:length(ring);
@@ -31,7 +82,9 @@ else
     orbit0(5:6,:)= 0 ;
 end
 
+fprintf('   Computing positive momentum acceptance\n')
 MA_pos = InterfaceMethod_binary(+1);% run interface method for positive energies
+fprintf('   Computing negative momentum acceptance\n')
 MA_neg = InterfaceMethod_binary(-1);% run interface method for negative energies
 duration_total = toc(t1);% finish time taking
 
@@ -39,8 +92,10 @@ duration_total = toc(t1);% finish time taking
 dpp= [MA_pos',MA_neg'];
 params = Settings.params;
 
+fprintf('   Computing Touschek lifetime\n')
 [TL,~]=TouschekPiwinskiLifeTime_inputoptics(ring,dpp,Settings.Ib,index,'lo',LinData,'pa',params);
 TL = TL/60/60;
+fprintf(['       Result: \n',num2str(TL),' hours\n'])
 
 save(Settings.outputName,'Settings','MA_pos','MA_neg','duration_total','index','TL','LinData','params','x_da','xp_da','u_da','up_da')
 
