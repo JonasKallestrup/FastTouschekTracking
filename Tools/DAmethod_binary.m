@@ -1,6 +1,12 @@
 function [x_da,xp_da] = DAmethod_binary(dpoffset,Settings)
 %{
 Method to compute dynamic aperture using a binary search 
+Technically, the search is performed by action, A, but the user specifies
+the wished resolution in terms of "x", since horizontal offset is more
+commonly used.
+
+The code is optimized to track multiple lines simultaneously to reduce
+tracking overhead.
 
 REQUIRED fields of "Settings" struct: 
 Settings.ring - lattice
@@ -10,7 +16,6 @@ Settings.xmax - maximum value of x
 Settings.resolution_x - resolution of x of binary search. 
 
 OPTIONAL fields of "Settings" struct:
-Settings.orbit - orbit to do binary search around
 Settings.G - matrix to normalize x,x' phase space 
 Settings.interpDASteps - number or steps to interpolate the found DA
 %}
@@ -22,21 +27,20 @@ nlines = Settings.nlines;
 xmax = Settings.xmax;
 resolution_x = Settings.resolution_x;
 
-if isfield(Settings,'orbit')
-    orbit_onenergy = Settings.orbit;
-else
-    if atGetRingProperties(ring,'is_6d')
-        orbit_onenergy = findorbit6(ring,1);
+orbit0 = findorbit(ring);
+orbit_4D = findorbit4(atradoff(ring),'dp',dpoffset,'guess',[orbit0(1:4);dpoffset;0]);
+orbit = findorbit(ring,'dp',dpoffset,'guess',[orbit_4D(1:4);orbit0(5)+dpoffset;orbit0(6)]);
+if ~isOrbitClosedEnough(orbit,orbit0,dpoffset)
+    if isnan(orbit_4D(1))
+        x_da = NaN;
+        xp_da = NaN;
+        return
     else
-        orbit_onenergy = [findorbit4(ring,0,1);0;0];
+        orbit = [orbit_4D(1:4);orbit0(5)+dpoffset;orbit0(6)];
     end
 end
-orbit_offenergy = findorbit4(ring,dpoffset,1);% estimate 4D closed orbit for off-momentum particle
-orbit = orbit_onenergy+[orbit_offenergy;dpoffset;0];% 
 
 theta = linspace(0,2*pi,nlines);
-theta0 = theta;
-r00 = repmat(orbit,1,nlines)+[1e-9;0;1e-9;0;0;0];
 
 % convert xmax and x-resolution into an maximum ampltidue and resolution
 if isfield(Settings,'G')
@@ -51,64 +55,51 @@ Amax = G*[xmax;0];
 Amax = sqrt(sum(Amax.^2));
 Ginv = inv(G);
 
-A_check = Amax*ones(1,nlines);
-A_lim_surv = zeros(1,nlines);
-A_lim_lost = Amax*ones(1,nlines);
-A_da = nan(1,nlines);
+Avalues = 0:resolution_A:Amax;
 
-n=0;
-while ~isempty(theta)
-    n=n+1;
-    xvec_check = Ginv*[A_check.*cos(theta);A_check.*sin(theta)];
-    r0 = r00;
+
+high = numel(Avalues)*ones(1,nlines);
+low = ones(1,nlines);
+linesBeingChecked = 1:nlines;
+A_da = zeros(1,nlines);
+
+while ~isempty(linesBeingChecked)
+    k = floor((high-low)/2+low);
+    xvec_check = Ginv*[Avalues(k).*cos(theta(linesBeingChecked));Avalues(k).*sin(theta(linesBeingChecked))];
+    
+    r0 = repmat(orbit,1,numel(linesBeingChecked))+[1e-9;0;1e-9;0;0;0];
     r0(1,:) = r0(1,:)+xvec_check(1,:);
     r0(2,:) = r0(2,:)+xvec_check(2,:);
-
     [~,lost] = ringpass(ring,r0,nTurns);
 
-    toDelete = [];
-    for a = 1:numel(lost)
-        if ~lost(a) % particle survived
-            if n == 1
-                dA(a) = 0;
-            else
-                dA(a) = (A_lim_lost(a) - A_check(a))/2;% change in amplitude for next run
-                A_lim_surv(a) = A_check(a);
-            end
-        else % particle is lost
-            dA(a) = (A_lim_surv(a) - A_check(a))/2;% change in amplitude for next run
-            A_lim_lost(a) = A_check(a);
-        end
-        if abs(dA(a)) < resolution_A
-            if A_lim_surv(a) == 0
-                A_da(a) = NaN;
-            else
-               A_da(a) = A_lim_surv(a); 
-            end
-            toDelete = [toDelete,a];
-        else
-            A_check(a) = A_check(a) + dA(a);
-        end
+    high(lost)= k(lost);% update high/low values
+    low(~lost) = k(~lost);
+    A_da(linesBeingChecked(~lost)) = Avalues(k(~lost));%update DA
 
-    end
+    % remove limited 
+    isAtResolutionLimit = (high-low)<=1;
+    high(isAtResolutionLimit)=[];
+    low(isAtResolutionLimit)=[];
+    linesBeingChecked(isAtResolutionLimit) = [];
 
-    % remove lines where boundary has already been discovered
-    theta(toDelete) = [];
-    A_lim_surv(toDelete) = [];
-    A_lim_lost(toDelete) = [];
-    A_check(toDelete) = [];
-    r00(:,toDelete) = [];
-    
 end
+
+A_da(A_da==0) = NaN;
 if isfield(Settings,'interpDASteps') % do cubic interpolation of DA if requested
-    if Settings.interpDASteps > 0 
+    if Settings.interpDASteps > 0
         theta_interp = linspace(0,2*pi,Settings.interpDASteps);
-        A_da = interp1(theta0,A_da,theta_interp,'cubic');
-        theta0 = theta_interp;
+        A_da = interp1(theta,A_da,theta_interp,'cubic');
+        theta = theta_interp;
     end
-    
+
 end
-xvec_da = Ginv*[A_da.*cos(theta0);A_da.*sin(theta0)];
+xvec_da = Ginv*[A_da.*cos(theta);A_da.*sin(theta)];
 x_da = xvec_da(1,:)+orbit(1)+1e-9;
 xp_da = xvec_da(2,:)+orbit(2);
 
+
+
+
+function yesno = isOrbitClosedEnough(orbit,orbit0,dpoffset)
+dpoffset_reached = orbit(5)-orbit0(5);
+yesno = ~(or(isnan(orbit(1)),abs(dpoffset) > 0 && abs((dpoffset-dpoffset_reached)/dpoffset) > 1e-2));

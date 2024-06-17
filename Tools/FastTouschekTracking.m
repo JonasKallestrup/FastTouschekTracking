@@ -1,4 +1,4 @@
-function TL = FastTouschekTracking(settingFilePath)
+function [TL,MA_pos,MA_neg] = FastTouschekTracking(settingFilePath)
 %{
 Main execution of FastTouschekTracking method.
 First, the dynamic apertures for the specified range of dp-values
@@ -37,13 +37,7 @@ computation method!
 %}
 
 
-addpath('/psi/home/kallestrup_j/at/atmat/')
-addpath('/psi/home/kallestrup_j/at_jk/');
-atpath;
-
 fprintf('\n\n ### BEGINNING FAST TOUSCHEK TRACKING ###\n\n')
-
-
 if isstring(settingFilePath) || ischar(settingFilePath)
     load(settingFilePath,'Settings')
 else
@@ -68,6 +62,7 @@ fprintf(['   Launching DA computation. Method: ',Settings.DAmethod,'\n'])
 [u_da,up_da,x_da,xp_da,Settings] = computeDA(Settings);
 dpoffsets_DA = Settings.dpoffsets_DA;
 fprintf('   DA computation finished\n')
+
 %% perform interface method
 % localize indices in lattice with non-zero length
 index = 1:length(ring);
@@ -84,8 +79,12 @@ end
 
 fprintf('   Computing positive momentum acceptance\n')
 MA_pos = InterfaceMethod_binary(+1);% run interface method for positive energies
+% MA_pos = InterfaceMethod_line(+1);% run interface method for positive energies
+
 fprintf('   Computing negative momentum acceptance\n')
 MA_neg = InterfaceMethod_binary(-1);% run interface method for negative energies
+% MA_neg = InterfaceMethod_line(-1);% run interface method for negative energies
+
 duration_total = toc(t1);% finish time taking
 
 [~,LinData] = atlinopt4(ring,index);
@@ -99,49 +98,62 @@ fprintf(['       Result: \n',num2str(TL),' hours\n'])
 
 save(Settings.outputName,'Settings','MA_pos','MA_neg','duration_total','index','TL','LinData','params','x_da','xp_da','u_da','up_da')
 
+
     function MA_found = InterfaceMethod_binary(posNeg)
-        % use binary search to find local MA
-        MA_lost = posNeg*Settings.dpmax*ones(1,numel(index));
-        MA_check = MA_lost;
-        MA_survives = zeros(1,numel(index));
-        MA_found = MA_survives;
-        index_binary = index; % copy of lattices indexes to be checked
+        % Interface method based on a binary search at each element location
+        values = 0:posNeg*Settings.dpResolution:posNeg*Settings.dpmax;
+        low = ones(1,numel(index));
+        high = numel(values).*ones(1,numel(index));
+        index_binary = index;
 
         while ~isempty(index_binary)
-            Lout = trackAround(ring,MA_check,index_binary);
-            toDelete = [];
-            for a = 1:numel(index_binary)
-                isIn = isWithin(Lout(1:2,a),MA_check(a));% check if particle is within polygon
-                if isIn % particle survives
-                    dMA(a) = (MA_lost(a)-MA_check(a))/2;
-                    MA_survives(a) = MA_check(a);
+            whichMembers = find(ismember(index,index_binary));
+            k = floor((high-low)/2+low);
+            Lout = trackAround(ring,values(k),index_binary);
 
-                else % particle is lost
-                    dMA(a) = (MA_survives(a)-MA_check(a))/2;
-                    MA_lost(a) = MA_check(a);
-                end
-
-                if abs(dMA(a)) < Settings.dpResolution
-                    if MA_survives(a) == 0
-                        MA_found(a) = NaN;
-                    else
-                        MA_found(a) = MA_survives(a);
-                    end
-                    toDelete = [toDelete,a];
-                else
-                    MA_check(a) = MA_check(a)+dMA(a);
-                end
+            isIn = [];
+            for a =  1:numel(index_binary)
+                isIn(a) = isWithin(Lout(1:2,a),values(k(a)));% check if particle is within polygon
             end
+            isIn = logical(isIn);
+            high(~isIn) = k(~isIn);
+            low(isIn) = k(isIn);
 
-            index_binary(toDelete) = [];
-            MA_lost(toDelete) = [];
-            MA_survives(toDelete) = [];
-            MA_check(toDelete) = [];
-            dMA(toDelete) = [];
+            isAtResolutionLimit = (high-low)<=1;
+            MA_found(whichMembers(isIn)) = values(k(isIn));
+            
+            index_binary(isAtResolutionLimit)=[];
+            high(isAtResolutionLimit)=[];
+            low(isAtResolutionLimit)=[];
+        end
+
+    end
+
+
+    function MA_found = InterfaceMethod_line(posNeg)
+        % Interface method based on a line search at each element location
+        values = 0:posNeg*Settings.dpResolution:posNeg*Settings.dpmax;
+        index_line = index;
+        for b =  1:numel(values)
+            whichMembers = find(ismember(index,index_line));
+            Lout = trackAround(ring,values(b)*ones(size(index_line)),index_line);
+
+            isIn = [];
+            for a =  1:numel(index_line)
+                isIn(a) = isWithin(Lout(1:2,a),values(b));% check if particle is within polygon
+            end
+            isIn = logical(isIn);
+            MA_found(whichMembers(isIn)) = values(b);
+            index_line(~isIn) = [];
+            if isempty(index_line)
+                break;
+            end
         end
     end
 
+
     function Lout = trackAround(ring,dp,indices)
+        %Function to track particles from multiple, different indicies to the reference location
         Lin = orbit0(:,indices(1))+[1e-9;0;1e-9;0;dp(1);0];
         for a = 1:numel(indices)
             if a < numel(indices)
@@ -178,7 +190,7 @@ save(Settings.outputName,'Settings','MA_pos','MA_neg','duration_total','index','
         if all(ui == 0)
             isIn = 0;
         else
-            % transfer to physical phase-space
+            % transfer from normalized to physical phase-space
             P = inv(G)*[ui;upi];
             isIn = inpolygon(xxp(1),xxp(2),P(1,:),P(2,:));
         end

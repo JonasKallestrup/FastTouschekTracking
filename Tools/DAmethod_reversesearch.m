@@ -1,6 +1,6 @@
-function [x_da,xp_da] = DAmethod_sieve(dpoffset,Settings)
+function [x_da,xp_da] = DAmethod_reversesearch(dpoffset,Settings)
 %{
-Method to compute dynamic aperture using a seive search 
+Method to compute dynamic aperture using a reverse search 
 Technically, the search is performed by action, A, but the user specifies
 the wished resolution in terms of "x", since horizontal offset is more
 commonly used.
@@ -13,8 +13,7 @@ Settings.ring - lattice
 Settings.nTurns - number of turns to track
 Settings.nlines - number of radial lines
 Settings.xmax - maximum value of x
-Settings.resolution_x_coarse -  coarse resolution of x search
-Settings.resolution_x_fine - fine resolution of x search
+Settings.resolution_x - resolution of x of binary search. 
 
 OPTIONAL fields of "Settings" struct:
 Settings.G - matrix to normalize x,x' phase space 
@@ -26,8 +25,7 @@ ring = Settings.ring;
 nTurns = Settings.nTurns;
 nlines = Settings.nlines;
 xmax = Settings.xmax;
-resolution_x_coarse = Settings.resolution_x_coarse;
-resolution_x_fine = Settings.resolution_x_fine;
+resolution_x = Settings.resolution_x;
 
 orbit0 = findorbit(ring);
 orbit_4D = findorbit4(atradoff(ring),'dp',dpoffset,'guess',[orbit0(1:4);dpoffset;0]);
@@ -51,63 +49,29 @@ else
     [~,LinData] = atlinopt2(ring,1);
     G = [1/sqrt(LinData.beta(1)),0;LinData.alpha(1)/sqrt(LinData.beta(1)),sqrt(LinData.beta(1))];
 end
-resolution_A_coarse = G*[resolution_x_coarse;0];
-resolution_A_fine = G*[resolution_x_fine;0];
-resolution_A_coarse = sqrt(sum(resolution_A_coarse.^2));
-resolution_A_fine = sqrt(sum(resolution_A_fine.^2));
-
+resolution_A = G*[resolution_x;0];
+resolution_A = sqrt(sum(resolution_A.^2));
 Amax = G*[xmax;0];
 Amax = sqrt(sum(Amax.^2));
 Ginv = inv(G);
-Avalues_coarse = 0:resolution_A_coarse:Amax;
-
+Avalues = 0:resolution_A:Amax;
 
 linesBeingChecked = 1:nlines;
-k = 1;
-while ~isempty(linesBeingChecked) && k <= numel(Avalues_coarse)
-    xvec_check = Ginv*[Avalues_coarse(k).*cos(theta(linesBeingChecked));Avalues_coarse(k).*sin(theta(linesBeingChecked))];
+A_da = zeros(1,nlines);
+k = numel(Avalues);
+while ~isempty(linesBeingChecked) && k >0 
+    xvec_check = Ginv*[Avalues(k).*cos(theta(linesBeingChecked));Avalues(k).*sin(theta(linesBeingChecked))];
     
     r0 = repmat(orbit,1,numel(linesBeingChecked))+[1e-9;0;1e-9;0;0;0];
     r0(1,:) = r0(1,:)+xvec_check(1,:);
     r0(2,:) = r0(2,:)+xvec_check(2,:);
     [~,lost] = ringpass(ring,r0,nTurns);
    
-    k_da(linesBeingChecked(~lost)) = k;%update DA
-    k=k+1;
+    A_da(linesBeingChecked(~lost)) = Avalues(k);%update DA
+    k=k-1;
     % remove lost lines
-    linesBeingChecked(lost) = [];
+    linesBeingChecked(~lost) = [];
 end
-
-
-
-Avalues_low = Avalues_coarse(k_da);
-Avalues_high = Avalues_coarse(k_da+1);
-for a =1:nlines
-    Avalues_fine(:,a) = Avalues_low(a):resolution_A_fine:Avalues_high(a);
-end
-
-A_da = Avalues_low;
-linesBeingChecked = 1:nlines;
-
-k = 1;
-while ~isempty(linesBeingChecked) && k <= numel(Avalues_fine)
-    xvec_check = Ginv*[Avalues_fine(k,:).*cos(theta(linesBeingChecked));Avalues_fine(k,:).*sin(theta(linesBeingChecked))];
-    
-    r0 = repmat(orbit,1,numel(linesBeingChecked))+[1e-9;0;1e-9;0;0;0];
-    r0(1,:) = r0(1,:)+xvec_check(1,:);
-    r0(2,:) = r0(2,:)+xvec_check(2,:);
-    [~,lost] = ringpass(ring,r0,nTurns);
-   
-    A_da(linesBeingChecked(~lost)) = Avalues_fine(k,~lost);%update DA
-    k=k+1;
-    % remove lost lines
-    linesBeingChecked(lost) = [];
-    Avalues_fine(:,lost) = [];
-end
-
-
-
-
 
 A_da(A_da==0) = NaN;
 if isfield(Settings,'interpDASteps') % do cubic interpolation of DA if requested

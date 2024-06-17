@@ -14,96 +14,43 @@ Settings.dpmax          - maximum dp/p used for dynamic aperture search
 Settings.dpSliceStep    - dp/p separation of two adjecent x,x' DA slices
 Settings.G              - matrix to normalize x,x' phase space 
                             (inherited automatically from FastTouschekTracking)
-
-
 %}
 
 
-if strcmp(Settings.DAmethod,'grid')
-    DAmethod = @(dpoffset,Settings) DAmethod_grid(dpoffset,Settings);
-elseif strcmp(Settings.DAmethod,'polargrid')
-    DAmethod = @(dpoffset,Settings) DAmethod_polargrid(dpoffset,Settings);
+if strcmp(Settings.DAmethod,'line')
+    DAmethod = @(dpoffset,Settings) DAmethod_line(dpoffset,Settings);
 elseif strcmp(Settings.DAmethod,'sieve')
     DAmethod = @(dpoffset,Settings) DAmethod_sieve(dpoffset,Settings);
 elseif strcmp(Settings.DAmethod,'binary')
     DAmethod = @(dpoffset,Settings) DAmethod_binary(dpoffset,Settings);
-elseif strcmp(Settings.DAmethod,'floodfill')
-    DAmethod = @(dpoffset,Settings) DAmethod_floodfill(dpoffset,Settings);
-elseif strcmp(Settings.DAmethod,'polarfloodfill')
-    DAmethod = @(dpoffset,Settings) DAmethod_polarfloodfill(dpoffset,Settings);
-elseif strcmp(Settings.DAmethod,'dart')
-    DAmethod = @(dpoffset,Settings) DAmethod_dart(dpoffset,Settings);
+elseif strcmp(Settings.DAmethod,'reverse')
+    DAmethod = @(dpoffset,Settings) DAmethod_reversesearch(dpoffset,Settings);
 else
     error('DA method not recognized');
 end
 
 
 fprintf('      Computing DA for dp = 0\n')
-
-k=1;
 [x_tmp,xp_tmp] = DAmethod(0,Settings);% Compute DA for dp=0
 if all(isnan(x_tmp))% step failed
     error('Lattice has no dynamic aperture for dp = 0')
 end
-dpSteps_good(k) = 0;
-x_da{k} = x_tmp;
-xp_da{k} = xp_tmp;
-k=k+1;
+dpSteps_good(1) = 0;
+x_da{1} = x_tmp;
+xp_da{1} = xp_tmp;
 
-dpStep_lost = [];
-dpStep_cur = Settings.dpmax;
 
-% First compute the positive boundary
-boundaryFound= 0;
-i = 0;
-while ~boundaryFound
-    i = i+1;
-    fprintf(['      Computing DA for dp = ',num2str(dpStep_cur),'\n'])
-    [x_tmp,xp_tmp] = DAmethod(dpStep_cur,Settings);
-    if any(isnan(x_tmp)) || any(x_tmp==0)% step failed
-        dpStep_lost = [dpStep_lost,dpStep_cur];
-        dpStep_cur = max(dpSteps_good)+(min(dpStep_lost)-max(dpSteps_good))/2;
-    else
-        dpSteps_good(k) = dpStep_cur;
-        x_da{k} = x_tmp;
-        xp_da{k} = xp_tmp;
-        k=k+1;
-        if i == 1
-           break; %the maximum dp value was still OK.
-        end
-        dpStep_cur = max(dpSteps_good)+ (min(dpStep_lost)-max(dpSteps_good))/2;
+% Do a binary search of x-x'-dp slices to find maximum/minimum relevant
+% dp/p to within the dpResolution.
+[dp_positive,x_da_positive,xp_da_positive] = binarySearch_DAdp(DAmethod,Settings.dpResolution, Settings.dpmax,Settings.dpResolution,Settings);
+fprintf(['          Positive DA-DP boundary found: ',num2str(max(dp_positive)),'\n'])
 
-    end
-    boundaryFound = min(abs(dpStep_lost-dpStep_cur))<Settings.dpResolution;
-end
-fprintf(['          Positive DA-DP boundary found: ',num2str(max(dpSteps_good)),'\n'])
+[dp_negative,x_da_negative,xp_da_negative] = binarySearch_DAdp(DAmethod,-Settings.dpResolution, -Settings.dpmax,-Settings.dpResolution,Settings);
+fprintf(['          Negative DA-DP boundary found: ',num2str(min(dp_negative)),'\n'])
 
-% Next, compute the negative boundary
-boundaryFound= 0;
-dpStep_lost = [];
-i = 0;
-dpStep_cur = -Settings.dpmax; 
-while ~boundaryFound
-    i = i+1;
-    fprintf(['      Computing DA for dp = ',num2str(dpStep_cur),'\n'])
-    [x_tmp,xp_tmp] = DAmethod(dpStep_cur,Settings);
-    if any(isnan(x_tmp)) || any(x_tmp==0)% step failed
-        dpStep_lost = [dpStep_lost,dpStep_cur];
-        dpStep_cur = min(dpSteps_good)+(max(dpStep_lost)-min(dpSteps_good))/2;
-    else
-        dpSteps_good(k) = dpStep_cur;
-        x_da{k} = x_tmp;
-        xp_da{k} = xp_tmp;
-        k=k+1;
-        if i == 1
-           break; % The minimum dp value was still OK.
-        end
-        dpStep_cur = min(dpSteps_good)+ (max(dpStep_lost)-min(dpSteps_good))/2;
-        
-    end
-    boundaryFound = min(abs(dpStep_lost-dpStep_cur))<Settings.dpResolution;
-end
-fprintf(['          Negative DA-DP boundary found: ',num2str(min(dpSteps_good)),'\n'])
+dpSteps_good = [dpSteps_good,dp_positive,dp_negative];
+x_da = [x_da,x_da_positive,x_da_negative];
+xp_da = [xp_da,xp_da_positive,xp_da_negative];
 
 
 %{
@@ -111,18 +58,16 @@ After boundaries have been found, we sample the DA-DP 4D space by computing
 DAs for discrete values of dp. The values of dp to compute is decided by
 the dpSteps_DA variable specified by the user. 
 %}
-
-
 dp_toCheck = min(dpSteps_good):Settings.dpSliceStep:max(dpSteps_good);
 dp_toCheck = dp_toCheck(~ismember(dp_toCheck,dpSteps_good));
 for a = 1:numel(dp_toCheck)
     fprintf(['      Computing DA for intermediate step. dp = ',num2str(dp_toCheck(a)),'\n'])
-    [x_da{k},xp_da{k}] = DAmethod(dp_toCheck(a),Settings);
-    if all(x_da{k}==0)
-        x_da{k} = NaN;
-        xp_da{k} = NaN;
+    [x_da_tmp,xp_da_tmp] = DAmethod(dp_toCheck(a),Settings);
+    if ~any([isempty(x_da_tmp),any(isnan(x_da_tmp)),all(x_da_tmp==0)])
+        dpSteps_good(end+1) = dp_toCheck(a);
+        x_da{end+1} = x_da_tmp;
+        xp_da{end+1} = xp_da_tmp; 
     end
-    k=k+1;
 end
 
 
@@ -144,12 +89,37 @@ end
 Lastly, DA computations from both binary search and the equally-spaced dp steps
 are combined and sorted according to their dp-value. 
 %}
-dpoffsets_DA = [dpSteps_good,dp_toCheck];
-[Settings.dpoffsets_DA,I] = sort(dpoffsets_DA);
+[Settings.dpoffsets_DA,I] = sort(dpSteps_good);
 x_da = x_da(I);
 xp_da = xp_da(I);
 u_da = u_da(I);
 up_da = up_da(I);
+
+
+
+function [dp_stable,x_da_stable,xp_da_stable] = binarySearch_DAdp(DAmethod,value1, value2,resolution,Settings)
+values = value1:resolution:value2;
+low = 1;
+high = numel(values);
+
+dp_stable= [];
+x_da_stable = {};
+xp_da_stable = {};
+
+while floor(high-low) > 1
+    k = floor((high-low)/2)+low;
+    fprintf(['      Computing DA for dp = ',num2str(values(k)),'\n'])
+    [xout,xpout] = DAmethod(values(k),Settings);
+    if any([isempty(xout),any(isnan(xout)),all(xout==0)])
+        high = k;
+    else
+        low = k;
+        dp_stable(end+1) = values(k);
+        x_da_stable{end+1} = xout;
+        xp_da_stable{end+1} = xpout;
+    end
+end
+
 
 
 
