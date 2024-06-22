@@ -7,7 +7,7 @@ theta = linspace(0,2*pi,101);
 for a1 = 1:numel(theta)
     u_line = [u0,2*max(abs(u_in))*cos(theta(a1))];
     up_line = [up0,2*max(abs(up_in))*sin(theta(a1))];
-    [aa,bb] = polyxpoly(u_line',up_line',u_in,up_in);
+    [aa,bb] = intersections(u_line',up_line',u_in,up_in);
     if numel(aa) == 1
         u_out(a1) = aa;
         up_out(a1) = bb;
